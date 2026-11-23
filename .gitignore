@@ -1,0 +1,20 @@
+# Local secrets and environment overrides
+.env
+.env.*
+!.env.example
+
+# Dependencies and generated files
+node_modules/
+*.log
+npm-debug.log*
+
+# Local archives and indexes
+.rubberway-index.json
+.rubberway-folder.json
+.rubberway-pdf-cache.json
+
+# Assets nécessaires à l'interface uniquement ; ne jamais publier la base producteurs.
+assets/*
+!assets/fond_login_sogb.png
+!assets/logo_sogb.jpg
+data/

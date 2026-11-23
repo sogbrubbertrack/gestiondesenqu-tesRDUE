@@ -1,0 +1,305 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#27833a">
+  <title>ENQUÊTES RDUE - SOGB</title>
+<link rel="stylesheet" href="/styles.css?v=monthly-report-five-sections-v1">
+</head>
+<body>
+  <main id="loginView" class="login-shell">
+    <form id="loginForm" class="login-card">
+      <img class="login-logo" src="/assets/logo_sogb.jpg" alt="Logo SOGB">
+      <p class="eyebrow">ENQUÊTES RDUE - SOGB</p>
+      <h1>Connexion</h1>
+      <p class="login-description">Connectez-vous pour consulter les enquêtes enregistrées.</p>
+      <label>Adresse e-mail<input name="email" type="email" autocomplete="username" required placeholder="nom@entreprise.ci"></label>
+      <label>Mot de passe<input name="password" type="password" autocomplete="current-password" required></label>
+      <p id="loginError" class="form-error" role="alert"></p>
+      <button type="submit" class="primary" id="loginButton">Se connecter</button>
+      <small>Les enquêtes sont gérées dans Supabase. Les fichiers PDF restent dans le dossier local.</small>
+    </form>
+  </main>
+
+  <div id="appShell" hidden>
+    <header class="topbar">
+      <div class="brand"><img class="sogb-logo" src="/assets/logo_sogb.jpg" alt="Logo SOGB"><div><strong>ENQUÊTES RDUE - SOGB</strong><span>Gestion des enquêtes RDUE</span></div></div>
+      <div class="header-right"><div class="connected-agent"><span class="connection-dot"></span><span id="connectedRole"></span><span>Agent connecté</span><strong id="connectedAgent">-</strong><button type="button" class="logout-button" id="logoutButton">Déconnexion</button></div></div>
+    </header>
+
+  <main class="page">
+    <nav class="app-tabs" aria-label="Navigation principale">
+      <button class="app-tab active" type="button" data-view="dashboardView" data-module="dashboard">Tableau de bord</button>
+      <button class="app-tab" type="button" data-view="archiveView" data-module="archives">Enquêtes par agent</button>
+      <button class="app-tab" type="button" data-view="summaryView" data-module="summary">Résumé des enquêtes</button>
+      <button class="app-tab" type="button" data-view="reportsView" data-module="reports">Rapports</button>
+      <button class="app-tab" type="button" data-view="producersView" data-module="producers" hidden>Producteurs</button>
+      <button class="app-tab" type="button" data-view="settingsView" data-module="settings" hidden>Paramètres</button>
+    </nav>
+    <p id="loadingMessage" class="loading-message" role="status" hidden>Lecture du dossier d’enquêtes…</p>
+    <section id="restrictedView" class="app-view card restricted-view" hidden><h2>Aucun module attribué</h2><p>Demandez au superviseur de vous accorder l’accès aux modules nécessaires.</p></section>
+    <section id="dashboardView" class="app-view">
+    <section class="intro">
+      <div class="intro-actions">
+        <button class="primary" id="openUpload">＋ Ajouter une enquête</button>
+      </div>
+    </section>
+
+    <section class="metrics" aria-label="Résumé de l'activité">
+      <article class="metric"><span class="metric-icon green">▤</span><div><small>Enquêtes archivées</small><strong id="totalCount">0</strong></div></article>
+      <article class="metric"><span class="metric-icon blue">♙</span><div><small>Agents</small><strong id="agentCount">0</strong></div></article>
+      <article class="metric"><span class="metric-icon amber">✓</span><div><small>Conformes</small><strong id="conformingCount">0</strong></div></article>
+      <article class="metric"><span class="metric-icon red">!</span><div><small>Non conformes</small><strong id="nonConformingCount">0</strong></div></article>
+    </section>
+    <section class="card dashboard-agents">
+      <div class="section-heading"><div><h2>Activité par agent</h2><p>Nombre d’enquêtes et état de conformité.</p></div></div>
+      <div class="table-wrap"><table><thead><tr><th>Zone</th><th>Agent</th><th>Enquêtes</th><th>Conformes</th><th>Non conformes</th></tr></thead><tbody id="dashboardAgentsBody"></tbody></table></div>
+    </section>
+    <section class="card dashboard-panel">
+      <div class="section-heading"><div><h2>Indicateurs d'activité</h2><p>Les résultats évoluent selon les filtres sélectionnés.</p></div></div>
+      <div class="filters dashboard-filters">
+        <select id="dashboardZone"><option value="">Toutes les zones</option></select>
+        <select id="dashboardYear" aria-label="Année du graphique"></select>
+        <input id="dashboardFrom" type="date" aria-label="Date de début du tableau de bord">
+        <input id="dashboardTo" type="date" aria-label="Date de fin du tableau de bord">
+        <button id="clearDashboard" class="secondary" type="button">Effacer</button>
+      </div>
+      <div class="metrics dashboard-metrics" aria-label="Indicateurs filtrés">
+        <article class="metric"><span class="metric-icon green">&#10003;</span><div><small>Enquêtes réalisées</small><strong id="dashboardTotal">0</strong></div></article>
+        <article class="metric"><span class="metric-icon blue">%</span><div><small>Taux de conformité</small><strong id="dashboardRate">0 %</strong></div></article>
+        <article class="metric"><span class="metric-icon amber">V</span><div><small>Conformes</small><strong id="dashboardConforming">0</strong></div></article>
+        <article class="metric"><span class="metric-icon red">!</span><div><small>Non conformes</small><strong id="dashboardNonConforming">0</strong></div></article>
+      </div>
+      <div class="dashboard-charts">
+        <section class="dashboard-chart"><h3 id="dashboardMonthlyTitle">Enquêtes par mois</h3><div id="dashboardMonthlyChart" class="monthly-chart"></div></section>
+        <section class="dashboard-chart"><h3>État des enquêtes</h3><div id="dashboardStatusChart" class="status-chart"></div></section>
+      </div>
+    </section>
+    </section>
+
+    <section id="settingsView" class="app-view card settings-view" hidden>
+      <div class="section-heading"><div><h2>Paramètres</h2><p>Gérez le dossier d’enquêtes et les accès à RubberWay.</p></div></div>
+      <nav class="settings-subtabs" aria-label="Sous-onglets des paramètres" role="tablist">
+        <button type="button" class="settings-subtab is-active" role="tab" aria-selected="true" data-settings-tab="settingsFolderPanel">Dossiers d’enquête à lire</button>
+        <button type="button" class="settings-subtab" role="tab" aria-selected="false" data-settings-tab="fieldAgentsPanel">Comptes des agents de terrain</button>
+        <button type="button" class="settings-subtab" role="tab" aria-selected="false" data-settings-tab="platformAccountsPanel">Comptes d’accès à la plateforme</button>
+      </nav>
+
+      <section id="settingsFolderPanel" class="settings-panel" role="tabpanel">
+        <section class="settings-folder">
+          <div><h3>Dossier d’enquêtes à lire</h3><p id="settingsArchivePath">Chargement du chemin...</p></div>
+          <button type="button" class="secondary" id="chooseFolder">Choisir le dossier à lire</button>
+        </section>
+      </section>
+
+      <section id="fieldAgentsPanel" class="settings-panel" role="tabpanel" hidden>
+        <section class="field-agent-provisioning">
+          <div class="section-heading"><div><h3>Comptes des agents de terrain</h3><p>Recherchez un agent pour gérer son identifiant, son mot de passe et les villages de sa section.</p></div><button type="button" class="secondary" id="reloadFieldAgents">Actualiser</button></div>
+          <div class="field-agent-toolbar">
+            <label class="search">⌕ <input id="fieldAgentSearch" type="search" list="fieldAgentOptions" placeholder="Rechercher ou sélectionner un agent..." autocomplete="off"></label>
+            <datalist id="fieldAgentOptions"></datalist>
+            <button type="button" class="primary" id="createFieldAgentAccounts">Créer les comptes manquants</button>
+          </div>
+          <div class="field-agent-rules"><span>Mot de passe initial : <code>123456</code></span><small>Les agents terrain se connectent à l’application mobile. Les villages associés à leur section filtrent les planteurs visibles sur leur téléphone.</small></div>
+          <p id="fieldAgentsNotice" class="statistics-notice" role="status"></p>
+          <div id="fieldAgentDetail" class="field-agent-detail"><div class="agent-detail-empty"><strong>Sélectionnez un agent</strong><span>Sa fiche de compte et sa section s’afficheront ici.</span></div></div>
+          <div id="fieldAgentsList" class="field-agents-list" hidden></div>
+        </section>
+      </section>
+
+      <section id="platformAccountsPanel" class="settings-panel" role="tabpanel" hidden>
+      <div class="section-heading"><div><h3>Comptes d’accès à la plateforme</h3><p>Créez les comptes responsables et choisissez les modules auxquels ils peuvent accéder.</p></div></div>
+      <div class="account-create-toolbar"><button type="button" class="primary" id="toggleCreateAccount" aria-expanded="false" aria-controls="createAccountForm">+ Ajouter un nouveau compte</button></div>
+      <form id="createAccountForm" class="account-create-form" hidden>
+        <label>Nom du responsable<input name="display_name" required minlength="2" placeholder="Nom et prénoms"></label>
+        <label>Titre du responsable<select name="title" required><option value="" selected disabled>Choisir un titre</option><option value="Chef de secteur">Chef de secteur</option><option value="Chef de département">Chef de département</option><option value="Assistant">Assistant</option></select></label>
+        <label>Adresse e-mail<input name="email" type="email" required placeholder="responsable@entreprise.ci"></label>
+        <label>Mot de passe provisoire<input name="password" type="password" required minlength="8" autocomplete="new-password" placeholder="8 caractères minimum"></label>
+        <fieldset class="module-access"><legend>Modules autorisés</legend>
+          <label><input type="checkbox" name="permissions" value="dashboard"> Tableau de bord</label>
+          <label><input type="checkbox" name="permissions" value="archives"> Enquêtes par agent</label>
+          <label><input type="checkbox" name="permissions" value="summary"> Résumé des enquêtes</label>
+        </fieldset>
+        <fieldset class="module-access zone-access"><legend>Zones autorisées</legend>
+          <div id="createAccountZones" class="zone-checkboxes"><span class="muted">Les zones seront chargées depuis le dossier sélectionné.</span></div>
+        </fieldset>
+        <p id="accountFormError" class="form-error" role="alert"></p>
+        <button type="submit" class="primary" id="createAccountButton">Créer le compte responsable</button>
+      </form>
+      <div class="section-heading account-list-heading"><div><h3>Comptes et accès</h3><p>Les accès peuvent être modifiés à tout moment.</p></div><button type="button" class="secondary" id="reloadAccounts">Actualiser</button></div>
+      <div id="accountsList" class="accounts-list"><p class="muted">Chargement des comptes...</p></div>
+      <p id="accountSettingsNotice" class="statistics-notice"></p>
+      </section>
+    </section>
+
+    <section id="archiveView" class="app-view archive card" hidden>
+      <div class="section-heading"><div><h2>Archives</h2><p>Recherchez une enquête ou filtrez par agent et période.</p></div><span id="resultCount" class="result-count">0 résultat</span></div>
+      <div class="filters">
+        <label class="search">⌕ <input id="searchInput" type="search" placeholder="Nom, code planteur, village…"></label>
+        <select id="zoneFilter"><option value="">Toutes les zones</option></select>
+        <select id="agentFilter"><option value="">Tous les agents</option></select>
+        <select id="statusFilter"><option value="">Tous les états</option><option value="Conforme">Conforme</option><option value="Non conforme">Non conforme</option><option value="À vérifier">À vérifier</option><option value="__duplicates">Doublons à vérifier</option></select>
+        <input id="fromFilter" type="date" aria-label="Date de début">
+        <input id="toFilter" type="date" aria-label="Date de fin">
+        <button id="clearFilters" class="secondary">Effacer</button>
+      </div>
+      <div id="duplicateSchemaNotice" class="duplicate-schema-notice" hidden>Pour enregistrer la date des enquêtes dans Supabase et détecter les doublons entre plusieurs ordinateurs, exécutez une fois le fichier <strong>duplicate-survey-check.sql</strong> dans l’éditeur SQL de Supabase.</div>
+      <div id="duplicateNotice" class="duplicate-notice" hidden><span></span><button id="showDuplicates" type="button" class="secondary">Afficher les doublons</button></div>
+      <div class="table-wrap">
+        <table><thead><tr><th>Date</th><th>Zone</th><th>Agent</th><th>Code PHI</th><th>Nom du planteur</th><th>État de l'enquête</th><th>PDF</th><th>Annotation / reprise</th></tr></thead>
+          <tbody id="recordsBody"></tbody>
+        </table>
+        <div id="emptyState" class="empty"><div class="empty-icon">▧</div><strong>Aucune enquête à afficher</strong><span>Ajoutez un PDF pour commencer votre classement.</span><button class="secondary" id="emptyUpload">Ajouter une enquête</button></div>
+      </div>
+    </section>
+
+    <section id="summaryView" class="app-view card" hidden>
+      <div class="section-heading"><div><h2>Résumé des enquêtes par agent</h2><p>Statistiques synchronisées dans Supabase ; les PDF restent dans le dossier local.</p></div><span id="statisticsCount" class="result-count">0 enquête</span></div>
+      <div class="filters statistics-filters">
+        <label class="search">&#128269; <input id="statisticsAgent" type="search" list="statisticsAgentsList" autocomplete="off" placeholder="Rechercher un agent..."></label>
+        <datalist id="statisticsAgentsList"></datalist>
+        <button id="clearStatistics" class="secondary" type="button">Effacer</button>
+      </div>
+      <div id="statisticsNotice" class="statistics-notice"></div>
+      <div id="statisticsContent"></div>
+    </section>
+
+    <section id="reportsView" class="app-view card monthly-report-view" hidden>
+      <article class="monthly-report-print" aria-hidden="true">
+        <header class="monthly-report-print-header"><img src="/assets/logo_sogb.jpg" alt="SOGB"><div><h1>RAPPORT MENSUEL DES ENQUÊTES RDUE</h1><p id="reportPrintPeriod"></p></div></header>
+        <p id="reportPrintSummary" class="monthly-report-print-summary"></p>
+        <p id="reportPrintGeneratedAt" class="monthly-report-print-date"></p>
+        <h2>1. Réalisations par zone</h2>
+        <table class="monthly-report-print-table"><thead><tr><th>Zone</th><th>Enquêtes</th><th>Conformes</th><th>Non conformes</th><th>À vérifier</th><th>Taux de conformité</th></tr></thead><tbody id="reportPrintZonesBody"></tbody></table>
+        <h2>2. Classement par agent</h2>
+        <table class="monthly-report-print-table"><thead><tr><th>Rang</th><th>Agent</th><th>Zones</th><th>Enquêtes</th><th>Conformes</th><th>Non conformes</th><th>Taux de conformité</th></tr></thead><tbody id="reportPrintAgentsBody"></tbody></table>
+        <h2>3. Enquêtes par village</h2>
+        <table class="monthly-report-print-table"><thead><tr><th>Zone</th><th>Village</th><th>Enquêtes</th><th>Conformes</th><th>Non conformes</th><th>Agents actifs</th></tr></thead><tbody id="reportPrintVillagesBody"></tbody></table>
+        <h2>4. Résumé des réponses</h2>
+        <p class="monthly-report-print-note">Les réponses sont résumées par question. Les questions 31, 32, 42 et 43 sont présentées sous forme de moyenne.</p>
+        <table class="monthly-report-print-table"><thead><tr><th>Question</th><th>Réponses et pourcentages</th></tr></thead><tbody id="reportPrintAnswersBody"></tbody></table>
+        <h2>5. Commentaire</h2>
+        <p id="reportPrintComment" class="monthly-report-print-comment">Aucun commentaire ajouté.</p>
+      </article>
+      <div class="section-heading">
+        <div><h2>Rapport mensuel</h2><p>Résumé des résultats du mois sélectionné.</p></div>
+        <div class="monthly-report-actions"><span id="monthlyReportCount" class="result-count">0 enquête</span><button id="generateMonthlyReportPdf" class="primary" type="button">Générer le rapport PDF</button></div>
+      </div>
+      <p id="reportPeriodLabel" class="report-period-label"></p>
+      <div class="filters monthly-report-filters">
+        <label>Mois<select id="reportMonth" aria-label="Mois du rapport"></select></label>
+        <label>Année<select id="reportYear" aria-label="Année du rapport"></select></label>
+      </div>
+      <div class="metrics monthly-report-metrics" aria-label="Indicateurs du rapport mensuel">
+        <article class="metric"><span class="metric-icon green">&#10003;</span><div><small>Enquêtes réalisées</small><strong id="reportTotal">0</strong></div></article>
+        <article class="metric"><span class="metric-icon amber">V</span><div><small>Conformes</small><strong id="reportConforming">0</strong></div></article>
+        <article class="metric"><span class="metric-icon red">!</span><div><small>Non conformes</small><strong id="reportNonConforming">0</strong></div></article>
+        <article class="metric"><span class="metric-icon blue">%</span><div><small>Taux de conformité</small><strong id="reportRate">0 %</strong></div></article>
+      </div>
+      <section class="report-section">
+        <div class="section-heading"><div><h3>1. Réalisations par zone</h3><p>Nombre d’enquêtes et état des résultats dans chaque zone.</p></div></div>
+        <div class="table-wrap report-table-wrap"><table><thead><tr><th>Zone</th><th>Enquêtes</th><th>Conformes</th><th>Non conformes</th><th>À vérifier</th><th>Taux de conformité</th></tr></thead><tbody id="reportZonesBody"></tbody></table></div>
+      </section>
+      <section class="report-section">
+        <div class="section-heading"><div><h3>2. Classement par agent</h3><p>Classés par nombre d’enquêtes, puis par taux de conformité en cas d’égalité.</p></div></div>
+        <div class="table-wrap report-table-wrap"><table><thead><tr><th>Rang</th><th>Agent</th><th>Zones</th><th>Enquêtes</th><th>Conformes</th><th>Non conformes</th><th>Taux de conformité</th></tr></thead><tbody id="reportAgentsBody"></tbody></table></div>
+      </section>
+      <section class="report-section">
+        <div class="section-heading"><div><h3>3. Enquêtes par village</h3><p>Totaux mensuels regroupés par village.</p></div></div>
+        <div class="table-wrap report-table-wrap"><table><thead><tr><th>Zone</th><th>Village</th><th>Enquêtes</th><th>Conformes</th><th>Non conformes</th><th>Agents actifs</th></tr></thead><tbody id="reportVillagesBody"></tbody></table></div>
+      </section>
+      <section class="report-section">
+        <div class="section-heading"><div><h3>4. Résumé des réponses</h3><p>Répartition des réponses ; moyenne pour les questions 31, 32, 42 et 43.</p></div></div>
+        <div class="table-wrap report-table-wrap"><table><thead><tr><th>Question</th><th>Réponses et pourcentages</th></tr></thead><tbody id="reportAnswersBody"></tbody></table></div>
+      </section>
+      <section class="report-section report-comment-section">
+        <div class="section-heading"><div><h3>5. Commentaire</h3><p>Ajoutez une observation qui figurera dans le PDF.</p></div></div>
+        <textarea id="reportComment" rows="3" maxlength="1200" placeholder="Saisir un commentaire pour ce rapport..."></textarea>
+      </section>
+    </section>
+
+    <section id="producersView" class="app-view card producers-view" hidden>
+      <div class="section-heading">
+        <div><h2>Producteurs</h2><p>Recherchez un planteur par code PHI, nom, contact ou village.</p></div>
+        <span id="producersCount" class="result-count">0 producteur</span>
+      </div>
+      <div class="filters producers-filters">
+        <label class="search">&#128269; <input id="producersSearch" type="search" autocomplete="off" placeholder="Code PHI, nom, contact ou village..."></label>
+        <button id="clearProducersSearch" class="secondary" type="button">Effacer</button>
+      </div>
+      <p id="producersNotice" class="statistics-notice" role="status"></p>
+      <div class="table-wrap producers-table-wrap">
+        <table class="producers-table">
+          <thead><tr><th>Code PHI</th><th>Nom du planteur</th><th>Contact</th><th>Village</th><th scope="col">Action</th></tr></thead>
+          <tbody id="producersBody"></tbody>
+        </table>
+        <div id="producersEmpty" class="empty" hidden><strong>Aucun producteur trouvé</strong><span>Modifiez les termes de recherche.</span></div>
+      </div>
+      <div class="pagination producers-pagination">
+        <button id="producersPrevious" class="secondary" type="button">Précédent</button>
+        <span id="producersPageLabel">Page 1</span>
+        <button id="producersNext" class="secondary" type="button">Suivant</button>
+      </div>
+    </section>
+
+  </main>
+
+  <dialog id="editProducerDialog" aria-labelledby="editProducerTitle">
+    <form id="editProducerForm">
+      <div class="dialog-head"><h2 id="editProducerTitle">Modifier la fiche du planteur</h2></div>
+      <div class="form-grid">
+        <label>Code PHI <input name="code" readonly></label>
+        <label>Nom complet <input name="name" required maxlength="200" autofocus></label>
+        <label>Contact <input name="contact" type="tel" maxlength="80"></label>
+        <label>Village <input name="village" maxlength="150"></label>
+      </div>
+      <p id="editProducerError" class="form-error" role="alert"></p>
+      <div class="dialog-actions">
+        <button id="cancelProducerEdit" class="secondary" type="button">Annuler</button>
+        <button id="saveProducerEdit" class="primary" type="submit">Enregistrer</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="uploadDialog">
+    <form id="uploadForm">
+      <div class="dialog-head"><div><p class="eyebrow">NOUVEAU DOSSIER</p><h2>Archiver une enquête</h2></div><button type="button" class="close" id="closeDialog" aria-label="Fermer">×</button></div>
+      <div class="form-grid">
+        <label class="wide">Nom de l'agent <input name="agent" list="agentsList" required placeholder="Ex. Kokora Ange"><datalist id="agentsList"></datalist></label>
+        <label>Zone <input name="zone" list="zonesList" required><datalist id="zonesList"></datalist></label>
+        <label>Date de l'enquête <input name="date" type="date" required></label>
+        <label>Statut <select name="status"><option>Réalisée, conforme</option><option>Réalisée, non conforme</option><option>En attente du PDF</option><option>En cours</option></select></label>
+        <label>Code planteur <input name="code" placeholder="Ex. PHI3179"></label>
+        <label>Nom du planteur <input name="producer" placeholder="Nom et prénoms"></label>
+        <label>Village <input name="village"></label>
+        <label class="wide">Critère non conforme <input name="criteria" placeholder="À renseigner si l'enquête est non conforme"></label>
+        <label class="wide file-label">Fichier PDF <input name="file" type="file" accept="application/pdf,.pdf" required></label>
+      </div>
+      <div class="folder-preview"><span>Classement automatique</span><strong id="folderPreview">Agent / année / enquête.pdf</strong></div>
+      <p id="formError" class="form-error" role="alert"></p>
+      <div class="dialog-actions"><button type="button" class="secondary" id="cancelUpload">Annuler</button><button type="submit" class="primary" id="saveButton">Enregistrer le PDF</button></div>
+    </form>
+  </dialog>
+  <dialog id="annotationDialog" class="annotation-dialog">
+    <form id="annotationForm">
+      <input name="pdf_key" type="hidden">
+      <div class="dialog-head"><div><p class="eyebrow">SUIVI DE L’ENQUÊTE</p><h2>Ajouter une annotation</h2></div><button type="button" class="close" id="closeAnnotation" aria-label="Fermer">×</button></div>
+      <p id="annotationSurveyName" class="annotation-survey-name"></p>
+      <label class="reprise-check"><input name="reprise_requise" type="checkbox"> Demander la reprise de cette enquête</label>
+      <label class="annotation-label">Motif ou consigne à transmettre à l’agent<textarea name="annotation" rows="5" maxlength="2000" required placeholder="Ex. Q9 : préciser le produit utilisé et reprendre l’enquête avec le planteur."></textarea></label>
+      <p id="annotationError" class="form-error" role="alert"></p>
+      <div class="dialog-actions"><button type="button" class="secondary" id="cancelAnnotation">Annuler</button><button type="submit" class="primary" id="saveAnnotation">Enregistrer</button></div>
+    </form>
+  </dialog>
+  <dialog id="villagePickerDialog" class="village-picker-dialog">
+    <div class="dialog-head"><div><p class="eyebrow">SECTION DE L'AGENT</p><h2>Ajouter un village</h2></div><button type="button" class="close" id="closeVillagePicker" aria-label="Fermer">×</button></div>
+    <label class="search village-search">⌕ <input id="villagePickerSearch" type="search" placeholder="Rechercher un village..." autocomplete="off"></label>
+    <div id="villagePickerResults" class="village-picker-results"></div>
+    <div class="dialog-actions"><button type="button" class="primary" id="doneVillagePicker">Terminé</button></div>
+  </dialog>
+  </div>
+  <div id="toast" class="toast" role="status"></div>
+  <script src="/app.js?v=monthly-report-five-sections-v4"></script>
+</body>
+</html>
