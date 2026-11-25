@@ -84,7 +84,7 @@ function configureNavigation() {
   tabs.forEach((tab) => setMainTabState(tab, tab === firstTab));
   document.querySelectorAll('.app-view').forEach((view) => { view.hidden = !firstTab || view.id !== firstTab.dataset.view; });
   document.querySelector('#restrictedView').hidden = Boolean(firstTab);
-  document.querySelector('#chooseFolder').hidden = currentProfile?.role !== 'supervisor';
+  document.querySelector('#chooseFolder').hidden = currentProfile?.role !== 'supervisor' || Boolean(supabaseConfig?.cloudStorage);
   document.querySelector('#openUpload').hidden = currentProfile?.role !== 'supervisor';
 }
 
@@ -752,9 +752,9 @@ async function loadState() {
     return [row.pdf_key, {
       id: row.pdf_key, date: local?.date || row.date_enquete || '', zone: row.zone || '', agent: row.agent || '',
       code: row.code_phi || '', producer: row.nom_planteur || '', village: row.village || '',
-      status: row.statut || 'À vérifier', criteria: '',
-      answers: local?.answers || [],
-      originalName: local?.originalName || '', size: local?.size || 0, pdfAvailable: Boolean(local),
+      status: row.statut || 'À vérifier', criteria: row.criteres || '',
+      answers: local?.answers || (Array.isArray(row.reponses) ? row.reponses : []),
+      originalName: local?.originalName || row.nom_fichier || '', size: local?.size || row.taille_pdf || 0, pdfAvailable: Boolean(local || row.pdf_path),
       ...annotationFields(annotationsByPdf.get(row.pdf_key)),
     }];
   }));
@@ -778,7 +778,7 @@ async function loadState() {
 
 function updateSettingsFolderPath(folderPath) {
   const element = document.querySelector('#settingsArchivePath');
-  if (element) element.textContent = folderPath || 'Aucun dossier sélectionné';
+  if (element) element.textContent = supabaseConfig?.cloudStorage ? 'PDF stockés de façon sécurisée dans Supabase Storage.' : (folderPath || 'Aucun dossier sélectionné');
 }
 
 function currentFilters() {
@@ -1490,6 +1490,10 @@ document.querySelector('#clearDashboard').addEventListener('click', () => {
 });
 
 function updateFolderPreview() {
+  if (supabaseConfig?.cloudStorage) {
+    document.querySelector('#folderPreview').textContent = 'Enquête et PDF archivés de façon sécurisée dans Supabase Storage.';
+    return;
+  }
   const zone = form.elements.zone.value.trim() || 'Zone';
   const agent = form.elements.agent.value.trim() || 'Agent';
   const date = form.elements.date.value || new Date().toISOString().slice(0, 10);
@@ -1574,18 +1578,32 @@ form.addEventListener('submit', async (event) => {
   saveButton.textContent = 'Enregistrement…';
   errorBox.textContent = '';
   try {
-    const parameters = new URLSearchParams();
-    for (const key of ['agent', 'date', 'code', 'producer', 'village', 'zone', 'status', 'criteria']) {
-      parameters.set(key, data.get(key) || '');
+    let result;
+    const metadata = Object.fromEntries(['agent', 'date', 'code', 'producer', 'village', 'zone', 'status', 'criteria'].map((key) => [key, data.get(key) || '']));
+    metadata.filename = file.name;
+    if (supabaseConfig?.cloudStorage) {
+      if (supabaseSession.expires_at && supabaseSession.expires_at < Math.floor(Date.now() / 1000) + 30) await refreshSession();
+      const preparedResponse = await fetch('/api/upload-url', {
+        method: 'POST', headers: { Authorization: `Bearer ${supabaseSession.access_token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(metadata),
+      });
+      const prepared = await readResponse(preparedResponse);
+      const signedUpload = new URL(prepared.uploadUrl);
+      signedUpload.searchParams.set('token', prepared.token);
+      const uploadResponse = await fetch(signedUpload, {
+        method: 'PUT', headers: { 'Content-Type': 'application/pdf', 'x-upsert': 'false' }, body: file,
+      });
+      if (!uploadResponse.ok) throw new Error('Envoi du PDF dans Supabase Storage impossible. Vérifiez le bucket et sa limite de taille.');
+      const completeResponse = await fetch('/api/complete-upload', {
+        method: 'POST', headers: { Authorization: `Bearer ${supabaseSession.access_token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...metadata, id: prepared.id, path: prepared.path }),
+      });
+      result = await readResponse(completeResponse);
+    } else {
+      const parameters = new URLSearchParams(metadata);
+      const response = await fetch(`/api/upload?${parameters.toString()}`, { method: 'POST', headers: { 'Content-Type': 'application/pdf' }, body: file });
+      result = await readResponse(response);
     }
-    parameters.set('filename', file.name);
-    const response = await fetch(`/api/upload?${parameters.toString()}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/pdf' },
-      body: file,
-    });
-    const result = await response.json();
-    if (!response.ok) throw new Error(result.error || 'Enregistrement impossible.');
     dialog.close();
     await loadState();
     showToast(`Enquête archivée pour ${result.record.agent}.`);
@@ -1604,6 +1622,12 @@ async function initialize() {
     }
     const response = await fetch('/api/config');
     supabaseConfig = await response.json();
+    if (supabaseConfig.cloudStorage) {
+      const loginNote = document.querySelector('#loginView small');
+      if (loginNote) loginNote.textContent = 'Les enquêtes et leurs PDF sont stockés de façon sécurisée dans Supabase.';
+      const loadingMessage = document.querySelector('#loadingMessage');
+      if (loadingMessage) loadingMessage.textContent = 'Lecture des enquêtes stockées en ligne.';
+    }
     const stored = localStorage.getItem(SESSION_KEY);
     if (!stored) return;
     supabaseSession = JSON.parse(stored);
@@ -1621,7 +1645,7 @@ async function initialize() {
       document.querySelector('#loadingMessage').hidden = true;
       showToast(`Connecté, mais chargement des données impossible : ${loadError.message}`);
     }
-    if (!appState.sourceDirectoryFound) showToast(`Dossier « Enquête RDUE » introuvable : ${appState.archiveDirectory}`);
+    if (!supabaseConfig.cloudStorage && !appState.sourceDirectoryFound) showToast(`Dossier « Enquête RDUE » introuvable : ${appState.archiveDirectory}`);
   } catch (error) {
     localStorage.removeItem(SESSION_KEY);
     supabaseSession = null;

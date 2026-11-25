@@ -33,9 +33,11 @@ const FOLDER_SETTINGS_PATH = path.join(ARCHIVE_DIR, '.rubberway-folder.json');
 const PDF_CACHE_PATH = path.join(ARCHIVE_DIR, '.rubberway-pdf-cache.json');
 const PRODUCERS_DATABASE_PATH = path.join(APP_DIR, 'data', 'producteurs.csv');
 const MAX_FILE_SIZE = 40 * 1024 * 1024;
+const STORAGE_BUCKET = readLocalEnv('RUBBERWAY_STORAGE_BUCKET') || 'rubberway-enquetes';
+const CLOUD_MODE = process.env.VERCEL === '1';
 const execFileAsync = promisify(execFile);
 
-fs.mkdirSync(ARCHIVE_DIR, { recursive: true });
+if (!CLOUD_MODE) fs.mkdirSync(ARCHIVE_DIR, { recursive: true });
 
 function readSavedSurveyFolder() {
   try {
@@ -162,6 +164,45 @@ async function supabaseAdminRequest(endpoint, options = {}) {
     throw error;
   }
   return body;
+}
+
+async function storageAdminRequest(endpoint, options = {}) {
+  if (!SUPABASE_SERVICE_ROLE_KEY) throw new Error('La cl\u00e9 serveur Supabase est absente de la configuration Vercel.');
+  const response = await fetch(`${SUPABASE_URL}/storage/v1/${endpoint}`, {
+    ...options,
+    headers: {
+      apikey: SUPABASE_SERVICE_ROLE_KEY,
+      Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+      'Content-Type': 'application/json',
+      ...(options.headers || {}),
+    },
+  });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(body.message || body.error || `Supabase Storage a r\u00e9pondu ${response.status}.`);
+  return body;
+}
+
+function encodeStoragePath(value) {
+  return String(value || '').split('/').map(encodeURIComponent).join('/');
+}
+
+async function cloudProducerRows() {
+  const rows = [];
+  for (let offset = 0; ; offset += 1000) {
+    const page = await supabaseAdminRequest(`rest/v1/producteurs?select=code_phi,nom,contact,village&order=nom.asc&limit=1000&offset=${offset}`);
+    rows.push(...page);
+    if (page.length < 1000) return rows;
+  }
+}
+
+async function cloudSurveyRows() {
+  const rows = [];
+  const columns = 'pdf_key,zone,agent,code_phi,nom_planteur,village,statut,date_enquete,pdf_path,nom_fichier,taille_pdf,criteres,reponses';
+  for (let offset = 0; ; offset += 1000) {
+    const page = await supabaseAdminRequest(`rest/v1/enquetes?select=${columns}&order=date_enquete.desc&limit=1000&offset=${offset}`);
+    rows.push(...page);
+    if (page.length < 1000) return rows;
+  }
 }
 
 async function authenticatedUser(request) {
@@ -411,6 +452,7 @@ function visitPdfFiles(directory, visit) {
 function scanSurveyFolder() {
   sourceFilePaths.clear();
   sourceRecordMetadata.clear();
+  if (CLOUD_MODE) return { agents: [], zones: [], zoneAgents: [], surveys: [] };
   if (!fs.existsSync(surveyDirectory)) return { agents: [], zones: [], zoneAgents: [], surveys: [] };
   const producerVillageByCode = new Map();
   try {
@@ -666,7 +708,9 @@ const server = http.createServer(async (request, response) => {
           if (matched.has(account.user_id)) continue;
           agents.push({ name: account.display_name || account.login_identifier, source_name: account.agent_source_name || account.display_name || '', login_identifier: account.login_identifier || '', email: account.email || '', exists: true, user_id: account.user_id, section_name: account.section_name || '', villages: account.villages || [] });
         }
-        const villages = readProducerVillages();
+        const villages = CLOUD_MODE
+          ? [...new Set((await cloudProducerRows()).map((row) => String(row.village || '').trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'fr'))
+          : readProducerVillages();
         return sendJson(response, 200, { agents, villages });
       }
 
@@ -675,7 +719,9 @@ const server = http.createServer(async (request, response) => {
         const profile = profiles.find((row) => row.user_id === String(body.user_id || ''));
         if (!profile) return sendJson(response, 404, { error: 'Compte agent introuvable.' });
         const sectionName = body.section_name === undefined ? (profile.section_name || '') : String(body.section_name || '').trim();
-        const availableVillages = readProducerVillages();
+        const availableVillages = CLOUD_MODE
+          ? [...new Set((await cloudProducerRows()).map((row) => String(row.village || '').trim()).filter(Boolean))]
+          : readProducerVillages();
         const villages = body.villages === undefined ? (profile.villages || []) : cleanVillageAssignments(body.villages, availableVillages);
         if (sectionName && !villages.length) return sendJson(response, 400, { error: 'Ajoutez au moins un village à la section.' });
         if (!sectionName && villages.length) return sendJson(response, 400, { error: 'Indiquez le nom de la section.' });
@@ -798,6 +844,17 @@ const server = http.createServer(async (request, response) => {
       const user = await requireSupervisor(request, response);
       if (!user) return;
       const { user_id: agentId } = JSON.parse((await getBody(request)).toString('utf8') || '{}');
+      if (CLOUD_MODE) {
+        const producerRows = await cloudProducerRows();
+        let assignedVillages = null;
+        if (agentId !== undefined) {
+          const [agent] = await supabaseAdminRequest(`rest/v1/user_profiles?user_id=eq.${encodeURIComponent(agentId)}&role=eq.agent_terrain&select=villages&limit=1`);
+          if (!agent) return sendJson(response, 404, { error: 'Compte agent introuvable.' });
+          assignedVillages = new Set((agent.villages || []).map((village) => village.trim().toLocaleLowerCase('fr')));
+        }
+        const count = producerRows.filter((row) => !assignedVillages || assignedVillages.has(String(row.village || '').trim().toLocaleLowerCase('fr'))).length;
+        return sendJson(response, 200, { synchronized: count, already_shared: true, ...(assignedVillages && { assigned_villages: assignedVillages.size }) });
+      }
       let assignedVillages = null;
       if (agentId !== undefined) {
         if (typeof agentId !== 'string' || !agentId.trim()) {
@@ -839,7 +896,7 @@ const server = http.createServer(async (request, response) => {
   }
 
   if (request.method === 'GET' && url.pathname === '/api/config') {
-    return sendJson(response, 200, { supabaseUrl: SUPABASE_URL, supabaseAnonKey: SUPABASE_ANON_KEY });
+    return sendJson(response, 200, { supabaseUrl: SUPABASE_URL, supabaseAnonKey: SUPABASE_ANON_KEY, cloudStorage: CLOUD_MODE, storageBucket: STORAGE_BUCKET });
   }
 
   if (request.method === 'GET' && url.pathname === '/api/producers') {
@@ -850,7 +907,9 @@ const server = http.createServer(async (request, response) => {
       if (profile.role !== 'supervisor') {
         return sendJson(response, 403, { error: 'L’accès à la base des producteurs est réservé au superviseur.' });
       }
-      const allProducers = readProducerDatabase();
+      const allProducers = CLOUD_MODE
+        ? (await cloudProducerRows()).map((row) => ({ id: row.code_phi, code: row.code_phi, name: row.nom || '', contact: row.contact || '', village: row.village || '' }))
+        : readProducerDatabase();
       const query = normalizeSearch(url.searchParams.get('q') || '');
       const filtered = query
         ? allProducers.filter((producer) => normalizeSearch(
@@ -902,6 +961,15 @@ const server = http.createServer(async (request, response) => {
         values.push(value);
       }
 
+      if (CLOUD_MODE) {
+        const [existing] = await supabaseAdminRequest(`rest/v1/producteurs?code_phi=eq.${encodeURIComponent(changes.id)}&select=code_phi&limit=1`);
+        if (!existing) return sendJson(response, 409, { error: 'Cette fiche a chang\u00e9. Actualisez la liste avant de r\u00e9essayer.' });
+        await supabaseAdminRequest(`rest/v1/producteurs?code_phi=eq.${encodeURIComponent(changes.id)}`, {
+          method: 'PATCH', headers: { Prefer: 'return=minimal' },
+          body: JSON.stringify({ nom: values[0], contact: values[1], village: values[2] }),
+        });
+        return sendJson(response, 200, { updated: true });
+      }
       const contents = fs.readFileSync(PRODUCERS_DATABASE_PATH, 'utf8');
       const producer = parseSemicolonCsv(contents).find(({ id }) => id === changes.id);
       if (!producer) {
@@ -938,6 +1006,30 @@ const server = http.createServer(async (request, response) => {
     }
     if (!canUseWebPlatform(profile)) {
       return sendJson(response, 403, { error: 'Ce compte est réservé à l’application mobile.' });
+    }
+    if (CLOUD_MODE) {
+      try {
+        const rows = await cloudSurveyRows();
+        const isSupervisor = profile.role === 'supervisor';
+        const permitted = isSupervisor
+          ? rows
+          : (profile.permissions || []).some((module) => APP_MODULES.includes(module))
+            ? rows.filter((row) => (profile.zones || []).some((zone) => normalizeZone(zone) === normalizeZone(row.zone)))
+            : [];
+        const records = permitted.map((row) => ({
+          id: row.pdf_key, date: row.date_enquete || '', zone: row.zone || '', agent: row.agent || '',
+          code: row.code_phi || '', producer: row.nom_planteur || '', village: row.village || '',
+          status: row.statut || '\u00c0 v\u00e9rifier', criteria: row.criteres || '', answers: Array.isArray(row.reponses) ? row.reponses : [],
+          originalName: row.nom_fichier || '', size: row.taille_pdf || 0, pdfAvailable: Boolean(row.pdf_path),
+        }));
+        const agents = [...new Set(records.map((row) => row.agent).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'fr'));
+        const zones = [...new Set(records.map((row) => row.zone).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'fr'));
+        const zoneAgents = [...new Map(records.filter((row) => row.zone && row.agent).map(({ zone, agent }) => [`${normalizeZone(zone)}\u0000${normalizeZone(agent)}`, { zone, agent }])).values()];
+        return sendJson(response, 200, { records, agents, zones, zoneAgents, statisticsSourceId: '', archiveDirectory: 'PDF stock\u00e9s dans Supabase Storage', sourceDirectoryFound: true });
+      } catch (error) {
+        console.error(`Lecture des enqu\u00eates Supabase impossible : ${error.message}`);
+        return sendJson(response, 500, { error: `Lecture des enqu\u00eates impossible : ${error.message}` });
+      }
     }
     const scanned = scanSurveyFolder();
     const legacyRecords = records.filter((item) => !item.sourcePath && safeStoredPath(item.relativePath) && fs.existsSync(safeStoredPath(item.relativePath)));
@@ -1012,7 +1104,89 @@ const server = http.createServer(async (request, response) => {
     }
   }
 
+  if (CLOUD_MODE && request.method === 'POST' && url.pathname === '/api/upload-url') {
+    try {
+      if (!await requireSupervisor(request, response)) return;
+      const body = JSON.parse((await getBody(request, 16384)).toString('utf8') || '{}');
+      const agent = String(body.agent || '').trim();
+      const zone = String(body.zone || '').trim();
+      const date = String(body.date || '').trim();
+      const originalName = path.basename(String(body.filename || 'enquete.pdf')).slice(0, 180);
+      if (!agent || !zone || !/^\d{4}-\d{2}-\d{2}$/.test(date) || !originalName.toLowerCase().endsWith('.pdf')) {
+        return sendJson(response, 400, { error: 'Renseignez la zone, l’agent, la date et un fichier PDF valide.' });
+      }
+      const id = randomUUID();
+      const pdfPath = `uploads/${id}.pdf`;
+      const signed = await storageAdminRequest(`object/upload/sign/${encodeURIComponent(STORAGE_BUCKET)}/${encodeStoragePath(pdfPath)}`, { method: 'POST', body: JSON.stringify({}) });
+      const uploadUrl = signed.signedURL || signed.signedUrl || signed.url;
+      if (!signed.token || !uploadUrl) throw new Error('Supabase n’a pas fourni de lien de dépôt sécurisé.');
+      return sendJson(response, 200, { id, path: pdfPath, token: signed.token, uploadUrl: `${SUPABASE_URL}/storage/v1${uploadUrl.startsWith('/') ? uploadUrl : `/${uploadUrl}`}` });
+    } catch (error) {
+      return sendJson(response, 500, { error: error.message || 'Préparation de l’envoi du PDF impossible.' });
+    }
+  }
+
+  if (CLOUD_MODE && request.method === 'POST' && url.pathname === '/api/complete-upload') {
+    try {
+      if (!await requireSupervisor(request, response)) return;
+      const body = JSON.parse((await getBody(request, 16384)).toString('utf8') || '{}');
+      const pdfPath = String(body.path || '');
+      const id = String(body.id || '');
+      const agent = String(body.agent || '').trim();
+      const zone = String(body.zone || '').trim();
+      const date = String(body.date || '').trim();
+      if (!/^uploads\/[0-9a-f-]{36}\.pdf$/i.test(pdfPath) || id !== pdfPath.slice(8, -4) || !agent || !zone || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+        return sendJson(response, 400, { error: 'Les informations de dépôt sont invalides.' });
+      }
+      const fileResponse = await fetch(`${SUPABASE_URL}/storage/v1/object/${encodeURIComponent(STORAGE_BUCKET)}/${encodeStoragePath(pdfPath)}`, {
+        headers: { apikey: SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}` },
+      });
+      if (!fileResponse.ok) return sendJson(response, 400, { error: 'Le PDF n’a pas été reçu dans Supabase Storage.' });
+      const pdf = Buffer.from(await fileResponse.arrayBuffer());
+      if (pdf.length < 5 || pdf.length > MAX_FILE_SIZE || pdf.subarray(0, 5).toString() !== '%PDF-') {
+        return sendJson(response, 400, { error: 'Le fichier reçu n’est pas un PDF valide ou dépasse 40 Mo.' });
+      }
+      const textContent = extractPdfText(pdf);
+      const answers = answersFromPdfText(textContent);
+      const extractedCode = /Code\s*PHI\s*:\s*([A-Z0-9_-]+)/i.exec(textContent)?.[1] || '';
+      const extractedName = /PRODUCTEUR\s+Code\s+PHI\s*:\s*[A-Z0-9_-]+\s+Nom\s*:\s*(.*?)\s+Contact\s*:/i.exec(textContent)?.[1]?.trim() || '';
+      const extractedDate = /Date\s*:\s*(\d{2})\/(\d{2})\/(\d{4})/.exec(textContent);
+      const status = conformityFromPdfText(textContent);
+      const record = {
+        pdf_key: id, zone, agent, code_phi: extractedCode || String(body.code || '').trim(),
+        nom_planteur: extractedName || String(body.producer || '').trim(), village: String(body.village || '').trim(),
+        statut: ['Conforme', 'Non conforme'].includes(status) ? status : 'À vérifier',
+        date_enquete: extractedDate ? `${extractedDate[3]}-${extractedDate[2]}-${extractedDate[1]}` : date,
+        pdf_path: pdfPath, nom_fichier: path.basename(String(body.filename || 'enquete.pdf')).slice(0, 180),
+        taille_pdf: pdf.length, criteres: String(body.criteria || '').trim().slice(0, 300), reponses: answers,
+      };
+      await supabaseAdminRequest('rest/v1/enquetes?on_conflict=pdf_key', {
+        method: 'POST', headers: { Prefer: 'resolution=merge-duplicates,return=minimal' }, body: JSON.stringify([record]),
+      });
+      const stats = new Map();
+      for (const answer of answers) {
+        const reponse = String(answer.response || '').trim();
+        if (!reponse) continue;
+        const key = `${String(answer.ref || '')}\u0000${reponse}`;
+        const item = stats.get(key) || {
+          source_id: `cloud:${id}`, date_enquete: record.date_enquete, zone, agent,
+          question_ref: String(answer.ref || ''), question: String(answer.question || ''), reponse, nombre: 0,
+        };
+        item.nombre += 1;
+        stats.set(key, item);
+      }
+      if (stats.size) await supabaseAdminRequest('rest/v1/statistiques_reponses?on_conflict=source_id,date_enquete,zone,agent,question_ref,reponse', {
+        method: 'POST', headers: { Prefer: 'resolution=merge-duplicates,return=minimal' }, body: JSON.stringify([...stats.values()]),
+      });
+      return sendJson(response, 201, { record: { id, agent, status: record.statut } });
+    } catch (error) {
+      console.error(`Archivage cloud du PDF impossible : ${error.message}`);
+      return sendJson(response, 500, { error: `Archivage impossible : ${error.message}` });
+    }
+  }
+
   if (request.method === 'POST' && url.pathname === '/api/upload') {
+    if (CLOUD_MODE) return sendJson(response, 410, { error: 'Utilisez le dépôt sécurisé vers Supabase Storage.' });
     try {
       const agent = String(url.searchParams.get('agent') || '').trim();
       const zone = String(url.searchParams.get('zone') || '').trim();
@@ -1078,6 +1252,25 @@ const server = http.createServer(async (request, response) => {
     } catch (error) {
       return sendJson(response, 503, { error: error.message || 'Profil utilisateur indisponible.' });
     }
+    if (CLOUD_MODE) {
+      try {
+        const [record] = await supabaseAdminRequest(`rest/v1/enquetes?pdf_key=eq.${encodeURIComponent(id)}&select=pdf_key,zone,pdf_path&limit=1`);
+        const isSupervisor = profile.role === 'supervisor';
+        if (!record || !record.pdf_path || (!isSupervisor && (!(profile.permissions || []).includes('archives') || !(profile.zones || []).map(normalizeZone).includes(normalizeZone(record.zone))))) {
+          return sendJson(response, 404, { error: 'PDF introuvable ou hors des zones autoris\u00e9es.' });
+        }
+        const signed = await storageAdminRequest(`object/sign/${encodeURIComponent(STORAGE_BUCKET)}/${encodeStoragePath(record.pdf_path)}`, {
+          method: 'POST', body: JSON.stringify({ expiresIn: 90 }),
+        });
+        const signedUrl = signed.signedURL || signed.signedUrl;
+        if (!signedUrl) throw new Error('Lien de consultation s\u00e9curis\u00e9 indisponible.');
+        const location = signedUrl.startsWith('http') ? signedUrl : `${SUPABASE_URL}/storage/v1${signedUrl.startsWith('/') ? signedUrl : `/${signedUrl}`}`;
+        response.writeHead(302, { Location: location, 'Cache-Control': 'no-store' });
+        return response.end();
+      } catch (error) {
+        return sendJson(response, 500, { error: `Ouverture du PDF impossible : ${error.message}` });
+      }
+    }
     const record = sourceRecordMetadata.get(id) || records.find((item) => item.id === id);
     const isSupervisor = profile.role === 'supervisor';
     if (!record || (!isSupervisor && (!(profile.permissions || []).includes('archives') || !(profile.zones || []).map(normalizeZone).includes(normalizeZone(record.zone))))) {
@@ -1115,8 +1308,14 @@ const server = http.createServer(async (request, response) => {
   return fs.createReadStream(filePath).pipe(response);
 });
 
-server.listen(PORT, '127.0.0.1', () => {
-  console.log(`RubberWay Archives disponible sur http://127.0.0.1:${PORT}`);
-  console.log(`Dossier des enquêtes lu et utilisé pour les nouveaux fichiers : ${surveyDirectory}`);
-  console.log(`Index de gestion : ${INDEX_PATH}`);
-});
+if (!CLOUD_MODE) {
+  server.listen(PORT, '127.0.0.1', () => {
+    console.log(`RubberWay Archives disponible sur http://127.0.0.1:${PORT}`);
+    console.log(`Dossier des enquêtes lu et utilisé pour les nouveaux fichiers : ${surveyDirectory}`);
+    console.log(`Index de gestion : ${INDEX_PATH}`);
+  });
+}
+
+export default function vercelHandler(request, response) {
+  return server.emit('request', request, response);
+}
