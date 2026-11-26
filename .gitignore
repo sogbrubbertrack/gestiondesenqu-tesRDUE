@@ -18,4 +18,8 @@ assets/*
 !assets/fond_login_sogb.png
 !assets/logo_sogb.jpg
 !assets/rubberway-icon.svg
+!assets/rubberway-32.png
+!assets/rubberway-180.png
+!assets/rubberway-192.png
+!assets/rubberway-512.png
 data/

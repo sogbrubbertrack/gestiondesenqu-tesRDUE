@@ -9,9 +9,15 @@
   "theme_color": "#27833a",
   "icons": [
     {
-      "src": "/assets/rubberway-icon.svg?v=2",
-      "sizes": "any",
-      "type": "image/svg+xml",
+      "src": "/assets/rubberway-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/assets/rubberway-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
       "purpose": "any"
     }
   ]
