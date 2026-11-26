@@ -1,0 +1,18 @@
+{
+  "name": "RUBBERWAY – Gestion des enquêtes RDUE",
+  "short_name": "RUBBERWAY",
+  "description": "Gestion des enquêtes RDUE de la SOGB",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#27833a",
+  "icons": [
+    {
+      "src": "/assets/rubberway-icon.svg?v=2",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}
