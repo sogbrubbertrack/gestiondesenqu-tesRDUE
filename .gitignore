@@ -17,4 +17,5 @@ npm-debug.log*
 assets/*
 !assets/fond_login_sogb.png
 !assets/logo_sogb.jpg
+!assets/rubberway-icon.svg
 data/
